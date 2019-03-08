@@ -1,0 +1,677 @@
+---
+title: "Data Analysis on Retail Data"
+output:
+  html_notebook:
+    number_sections: yes
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+  html_document:
+    df_print: paged
+    toc: yes
+---
+   
+Date: 21/04/16   
+Author: Jonathan Chan   
+Description: Data Analysis on Retail Data   
+
+# Initial Data Loading
+
+```{r message=FALSE, warning=FALSE}
+library("tidyverse")
+library("lubridate")
+library("ggmap")
+library("plotly")
+library("viridis")
+library("wesanderson")
+library("DT")
+```
+
+Initialising data, which includes original data and new data, joining them to create a master set.
+```{r}
+info <- read.table("./Data/All_info.txt", header = TRUE, na.strings = c("", "NA"), 
+                   stringsAsFactors = FALSE)
+info_new <- read.csv("./Data/All_info(new)-1.csv", stringsAsFactors = FALSE, header = TRUE,
+                     na.strings = c("", "NA"))
+colnames(info_new) <- colnames(info)
+info_temp <- rbind(info, info_new)
+
+info_walk <- read.csv("./Data/info walk-1.csv", stringsAsFactors = FALSE)
+```
+Overall there are `r nrow(info_merge)` rows of data. With `r n_distinct(info_merge$Name)` unique customers.   
+
+Converts the dates in character format to date format and calculate age from date of birth.
+Redacted a lot of columns
+```{r}
+info_merge <- info_temp
+info_merge$Order.date <- dmy(info_temp$Order.date)
+info_merge$D.O.B. <- dmy(info_temp$D.O.B.)
+info_merge <- info_merge %>% mutate(Age = year(as.period(interval(info_merge$D.O.B., "21/04/16"))))
+select(info_merge[45:54, ], -c(Name, Post, D.O.B., Age, Sex, Gross.profit, Amount.1, Value, Order.value, Net.Order.Value, Proj..Value.w.o.discount, Proj..Cost.of.sales, Amount))
+```
+
+# Category Analysis
+To start of with some data cleansing to merge different type of horn products into a single group.
+```{r}
+info_merge$Material <- gsub(pattern = "Buffalo Horn", replace = "Horn", x = info_merge$Material)
+info_merge$Material <- gsub(pattern = "Carbon Horn", replace = "Horn", x = info_merge$Material)
+info_merge$Material <- gsub(pattern = "Thin Horn", replace = "Horn", x = info_merge$Material)
+```
+## By Material
+### Material with Age
+```{r}
+material_plot <- ggplot(filter(info_merge, Age > 0 & Age < 100, 
+              Material %in% c("Acetate", "Horn", "Combination", "Titanium", "Rimless")), 
+             aes(x = Material, y = Age, fill = Material)) +
+  theme(axis.text.y=element_blank()) +
+  geom_boxplot() +
+  geom_jitter(alpha = 0.2) +
+  scale_fill_viridis(discrete=T) +
+  geom_violin(alpha = 0.25)
+  ggtitle("Frame Material with Age")
+
+# ggplotly(material_plot, width = 900)
+  material_plot
+```
+```{r}
+mat.type <- data.frame()
+mat.type <- info_merge %>%
+  filter(Product.type %in% c("Frames", "Sunglasses"),
+         Material %in% c("Acetate", "Horn", "Combination", "Titanium", "Rimless"),
+         Amount > 0,  # takes only frames made by TD
+         is.na(Sex) == FALSE) %>%
+  group_by(Product.type, Material, Sex) %>%
+  summarise(orders = n(), Total.Order.value = sum(Amount, na.rm = TRUE), no.customers = n_distinct(Name))
+
+mat.type <- mutate(mat.type, 
+              Percentage.Orders = orders/sum(mat.type$orders),  # Creates profit/order and % of orders
+              Percentage.Order.Value = Total.Order.value/sum(mat.type$Total.Order.value),
+              Average.Order.value = Total.Order.value/orders,
+              Order.customer.ratio = orders/no.customers)
+
+```
+## Lens Analysis
+```{r}
+Lens_type <- info_merge %>% 
+  filter(Product.type == "Lenses") %>%
+  group_by(Lens.type) %>%
+  summarise(number = n())
+```
+
+### Lens Type with Age
+```{r}
+Lens_data <- subset(info_merge, Age > 0 & Age < 100 & Lens.type != "Bifocal")
+Lens_data$Lens.type <- factor(Lens_data$Lens.type, levels = c("Single vision", "Progressive"))
+# ggplotly(
+  ggplot(Lens_data, aes(x = Lens.type, y = Age)) +
+    geom_boxplot() +
+    theme(axis.text.y=element_blank()) +
+    geom_jitter(alpha = 0.2) +
+    geom_violin(alpha = 0.25)#,
+#   width = 900
+# )
+```
+
+### Lens Coatings/Finishes by Age
+```{r}
+Finish_type <- info_merge %>% 
+  filter(Product.type == "Lenses") %>%
+  group_by(Finish) %>%
+  summarise(number = n())
+write.csv(Finish_type, "finish.csv", row.names = FALSE)
+
+Lens_types <- read.csv("Lens type.csv")
+info_lens <- merge(x = info_merge, y = Lens_types, by.x = "Finish", by.y = "Finish")
+info_lens <- filter(info_lens, Age < 100, Age > 0)
+info_lens$Type <- factor(info_lens$Type, levels = c("Single Vision", "Digital", "Office Lens", "Progressive"))
+
+# ggplotly(
+  ggplot(info_lens, aes(x = Type, y = Age, fill = Type)) +
+    geom_boxplot() +
+    theme(axis.text.y=element_blank()) +
+    geom_jitter(alpha = 0.2) +
+    geom_violin(alpha = 0.25) +
+    scale_fill_manual(values = wes_palette("Moonrise3", 4, type = "discrete"))#,
+#   width = 900
+# )
+```
+
+# Age Patterns
+## Age distribution
+```{r}
+customers_age <- info_merge %>% filter(Age < 100, Age > 0, Amount > 0)
+
+#  Histogram of frequency of customers of certain age
+# ggplotly(
+  ggplot(customers_age %>% distinct(Name, Age), aes(Age)) +
+        theme(axis.text.y=element_blank(), axis.text.x=element_blank()) +
+        geom_histogram(binwidth = 5, alpha = 0.8, col = "white") +
+        scale_x_continuous(breaks = seq(0, 100, 5))#,
+#   width = 900
+# )
+```
+
+## Total Spend against Age (For Each Customer)
+```{r}
+Total_spend <- customers_age %>% 
+                group_by(Name) %>% 
+                summarise(Total.Spend = sum(Amount), Age = mean(Age))
+# ggplotly(
+  ggplot(Total_spend, aes(x = Age, y = Total.Spend)) + 
+    theme(axis.text.y=element_blank()) +
+    geom_point(shape = 1) +
+    geom_smooth() +
+    scale_x_continuous(breaks = seq(0, 100, 5)) +
+    scale_y_continuous(breaks = seq(0, 10000, 1000))#,
+#   width = 900
+# )
+```
+
+## Average Total Spend by Age {.tabset}
+### Regression Plot
+```{r}
+Average_spend <- customers_age %>% 
+  group_by(Name) %>% 
+  summarise(Total.Spend = sum(Amount), Age = mean(Age)) %>%
+  group_by(Age) %>% 
+  summarise(Average.spend = mean(Total.Spend))
+
+# ggplotly(
+  ggplot(Average_spend, aes(x = Age, y = Average.spend)) + 
+    theme(axis.text.y=element_blank()) +
+    geom_point(shape = 1) +
+    geom_smooth(method = "lm", formula = y ~ poly(x, 3)) +
+    scale_x_continuous(breaks = seq(0, 100, 10)) +
+    scale_y_continuous(breaks = seq(0, 10000, 100)) + 
+    ggtitle("Regression of Average Spend with Age (3rd Order Polynomial)")#,
+#   width = 900
+# )
+```
+### Model Summary
+Redacted
+```{r include=FALSE}
+age_spending <- lm(Average_spend$Average.spend ~ poly(Average_spend$Age, 3))
+
+summary(age_spending)
+```
+### Diagnostic Plots
+Redacted
+```{r include=FALSE}
+par(mfrow = c(2, 2))
+plot(age_spending)
+```
+
+
+## Frame cost and age
+```{r}
+Product_age <- info_merge %>%
+  filter(Product.type %in% c("Frames", "Sunglasses"), Amount > 0, Age > 0, Age < 100, Amount < 2500)
+# ggplotly(
+  ggplot(Product_age, aes(x = Age, y = Amount)) + 
+    theme(axis.text.y=element_blank()) +
+    geom_point(shape = 1) +
+    geom_smooth()#,
+#   width = 900
+# )
+```
+
+## Customer Age Group - Customer Count and Spend
+```{r}
+Age_range <- cbind(seq(1, 81, 5), seq(5, 85, 5))
+Age_label <- paste(Age_range[,1], "-", Age_range[,2], sep = "")
+info_merge$Age_group <- NA
+
+info_merge$Age_group <- cut(info_merge$Age, breaks = seq(0, 85, 5), labels = Age_label)
+
+age_grouping <- info_merge %>%
+  filter(Amount > 0, Age_group != "NA") %>%
+  group_by(Age_group) %>%
+  summarise(Count = n_distinct(Name), Total_amount = sum(Amount, na.rm = TRUE)) %>%
+  mutate(per_count = Count/sum(Count)*100, per_amount = Total_amount/sum(Total_amount)*100)
+
+info_merge %>%
+  filter(Amount > 0) %>%
+  count(Age_group)
+
+rank_p2 <- info_merge %>% 
+  filter(Amount > 0) %>%
+  group_by(Name) %>%
+  summarise(Total.Spend = sum(Amount, na.rm = TRUE), Age = mean(Age))
+  rank_p2 %>% mutate(age_group = cut(rank_p2$Age, breaks = seq(0, 85, 5), labels = Age_label)) %>%
+  count(age_group)
+
+    
+age_grouping2 <- age_grouping[, c("Age_group", "per_count", "per_amount")]
+colnames(age_grouping2) <- c("Age.Group", "Number", "Spend")
+age_grouping2 <- gather(age_grouping2, "Type", "Percent", Number, Spend)
+
+age_plot <- ggplot(age_grouping2, aes(x = Age.Group, y = Percent, group = Type, col = Type, fill = Type)) +
+  geom_bar(stat = "identity", alpha = 0.8, position = position_dodge()) +
+  theme(axis.text.x=element_blank()) +
+  scale_y_continuous(breaks = seq(0, 25, 5)) +
+  ggtitle("Age Group Breakdown") +
+  ylab("Percent") +
+  xlab("Age Group")
+
+# ggplotly(age_plot, width = 900)
+age_plot
+```
+## Purchase Frequency with Age
+```{r}
+# Looks at frequency of transactions based on age
+count_age <- info_merge %>% 
+  group_by(Name) %>% 
+  summarise(No.orders = n_distinct(Order.number), Age = mean(Age)) %>%
+  group_by(Age) %>% 
+  summarise(count = n()) %>% 
+  filter(count > 2, Age < 100, Age > 0)
+# average number of orders based on age
+freq_age <- info_merge %>% 
+  group_by(Name) %>% 
+  summarise(No.orders = n_distinct(Order.number), Age = mean(Age)) %>%
+  group_by(Age) %>%
+  filter(Age %in% count_age$Age, Age != 1) %>%
+  summarise(average = mean(No.orders))
+# plots the above average numeber of purchases bsed on age
+# ggplotly(
+  ggplot(freq_age, aes(Age, average)) +
+    theme(axis.text.y=element_blank()) +
+    geom_point() +
+    geom_smooth() +
+    scale_x_continuous(breaks = seq(0, 100, 10)) +
+    ylab("Number of Purchases")#,
+#   width = 900
+# )
+```
+# Visit Statistics
+All charts are redacted
+## Total number of purchases per customer
+```{r include=FALSE}
+# looks at the frequency of purchases & visits
+freq_purchase_visits <- info_merge %>% 
+  filter(Amount > 0, Product.type %in% c("Sunglasses", "Frames")) %>%
+  group_by(Name) %>%
+  summarise(purchases = n(), visits = n_distinct(Order.date)) 
+purchase_number <- freq_purchase_visits %>% count(purchases)
+
+plot_ly(purchase_number, labels = ~purchases, values = ~n, type = "pie", width = 900)
+```
+## Total number of visits per customer
+```{r include=FALSE}
+# same but for vists frequency
+freq_visits <- freq_purchase_visits %>% count(visits)
+
+plot_ly(freq_visits, labels = ~visits, values = ~n, type = "pie", width = 900)
+```
+
+## Number of purchases per visit
+```{r include=FALSE}
+# number of purchases on same day by visit, frames only
+no_purchase_day <- info_merge %>% 
+  filter(Amount > 0, Product.type %in% c("Sunglasses", "Frames")) %>%
+  group_by(Name, Order.date) %>% 
+  summarise(purchases = n()) %>%
+  count(purchases) %>%
+  mutate(percentage = n/sum(n)*100)
+
+plot_ly(no_purchase_day, labels = ~purchases, values = ~n, type = "pie", width = 900)
+```
+## Number of Days Between Visits
+```{r}
+multi_buy_visit <- info_merge %>% 
+  filter(Amount > 0, Product.type %in% c("Sunglasses", "Frames")) %>%
+  group_by(Name, Order.date) %>% 
+  summarise(purchases = n()) %>% 
+  count(purchases)
+
+# calculates the number of days between the order date and the last order date
+visits <- info_merge %>% 
+  filter(Product.type %in% c("Frames", "Sunglasses"), Amount > 0) %>%
+  group_by(Name) %>%
+  distinct(Order.date) %>%
+  arrange(Name, Order.date) %>%
+  mutate(days_next_visit = Order.date - lag(Order.date))
+
+# plots the number of days until their next visit
+# ggplotly(
+  ggplot(visits, aes(days_next_visit)) +
+    geom_histogram(binwidth = 30, alpha = 0.75, col = "white", fill = "Dark Blue", boundary=0)+
+    theme(axis.text.y=element_blank()) +
+    scale_x_continuous(breaks = seq(0, 600, 30)) +
+    ggtitle("Days to Next Visit") +
+    xlab("Number of Days") +
+    ylab("Number of Visits")#,
+#   width = 900
+# )
+```
+## Cumulative Graph of Number of Days to Customer Next Visit
+If a customer visits again, 60% of the time a customer they will return within the first 90 days since their last visit.
+```{r}
+ggplotly(
+  ggplot(visits %>% arrange(days_next_visit), aes(days_next_visit)) + 
+    stat_ecdf(geom = "step", col = "blue", size = 0.5) +
+    scale_x_continuous(breaks = seq(0, 600, 30)) +
+    scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+    ylab("Percentage"),
+  width = 900
+)
+```
+## Customer ranking and percentile calculations
+Note that table data has been redacted
+```{r}
+
+percentile_label <- paste(seq(0, 95, 5), "-", seq(5, 100, 5), sep ="")
+Age_range <- cbind(seq(1, 81, 5), seq(5, 85, 5))
+Age_label <- paste(Age_range[,1], "-", Age_range[,2], sep = "")
+
+rank_p1 <- info_merge %>% 
+  filter(Amount > 0, Product.type %in% c("Sunglasses", "Frames")) %>%
+  group_by(Name) %>%
+  summarise(Frames.Bought = n(), Visits = n_distinct(Order.date))
+rank_p2 <- info_merge %>% 
+  filter(Amount > 0) %>%
+  group_by(Name) %>%
+  summarise(Total.Spend = sum(Amount, na.rm = TRUE), Age = mean(Age))
+ranking <- merge(rank_p1, rank_p2, all.y = TRUE)
+
+ranking <- ranking %>% 
+  mutate(Ranking = rank(-Total.Spend, ties.method = "min"), 
+         Percentile =Ranking/max(Ranking)*100, 
+         Average_Frame_Spend = Total.Spend/Frames.Bought, 
+         Average_Visit_Spend = Total.Spend/Visits)
+
+ranking <- ranking %>% 
+  mutate(percentile_group = cut(ranking$Percentile, breaks = seq(0, 100, 5), 
+                                labels = percentile_label), 
+         age_group = cut(ranking$Age, breaks = seq(0, 85, 5), labels = Age_label))
+
+write.csv(ranking, "Ranking.csv", row.names = FALSE)
+head(select(ranking, -c(Name, Age, Total.Spend, Average_Frame_Spend, Average_Visit_Spend)), 9)
+```
+# Sales with Time
+## individual sales with time
+```{r}
+# ggplotly(
+  ggplot(info_merge %>% filter(Amount > 0), aes(x = Order.date, y = Amount)) +
+    theme(axis.text.y=element_blank()) +
+    geom_point(shape = 1) +
+    geom_smooth()#,
+#   width = 900
+# )
+```
+
+## total daily sales with time
+```{r}
+Sales_by_date <- info_merge %>% 
+                  group_by(Date = Order.date) %>% 
+                  summarise(Sales = sum(Amount, na.rm = TRUE))
+# ggplotly(
+  ggplot(Sales_by_date, aes(x = Date, y = Sales)) +
+    theme(axis.text.y=element_blank()) +
+    geom_point(shape = 1) +
+    geom_smooth()#,
+#   width = 900
+# )
+```
+
+## total monthly sales with time
+Monthly sales appear to rise and then tapper off, but the time frame is short so it might be a blip.
+```{r}
+Sales_by_month <- info_merge %>% 
+  mutate(Month = floor_date(Order.date, "month")) %>%
+  group_by(Month) %>% 
+  summarise(month_sales = sum(Amount, na.rm = T))
+
+# September sales is incomplete so excluded in this case
+# ggplotly(
+  ggplot(Sales_by_month, aes(x = Month, y = month_sales, ymin = 0)) +  
+    theme(axis.text.y=element_blank()) +
+    geom_point(size = 2) +
+    geom_smooth()#,
+#   width = 900
+# )
+```
+
+##unique customers plot earliest purchase date
+Drop in sales might be due to drop in new customer acquisition rate. 
+```{r}
+new_customer <- info_merge %>% 
+  filter(Amount > 0) %>%
+  group_by(Name) %>%
+  summarise(earliest.order = min(Order.date)) %>%
+  group_by(Month = floor_date(earliest.order, "month")) %>% 
+  summarise(new.customers = n())
+
+summary(new_customer$new.customers)
+
+# ggplotly(
+  ggplot(new_customer, aes(x = Month, y = new.customers, ymin = 0)) +
+    theme(axis.text.y=element_blank()) +
+    geom_point(size = 3) +
+    geom_smooth() +
+    geom_hline(yintercept = mean(new_customer$new.customers), color = "green") +
+    ggtitle("New Customer Acqusition Rate")#,
+#   width = 900
+# )
+```
+
+# Customer location mapping {.tabset}
+```{r}
+post_codes <- read.csv("./Data/Postcodes.csv")
+post_codes <- post_codes[ ,1]
+coordinates <- read.csv("Postcodes coordinates.csv")
+
+## install for newest verion of ggmap
+#if(!requireNamespace("devtools")) install.packages("devtools")
+#devtools::install_github("dkahle/ggmap", ref = "tidyup")
+
+register_google(key = "")
+```
+
+## UK
+90% of customers are located in the UK
+```{r}
+ggmap(get_map("Machester", zoom = 6, api_key = key), extent = "device") +
+  geom_point(aes(x = lon, y = lat), data = coordinates,
+             alpha = .15, color="darkred", size = 2)
+```
+## Greater London
+60% of all customers are located in London
+```{r}
+ggmap(get_map("SW1W", zoom = 11, api_key = key), extent = "device") +
+  geom_point(aes(x = lon, y = lat), data = coordinates,
+             alpha = .15, color="darkred", size = 2)
+```
+## London
+```{r}
+ggmap(get_map("SW1W", zoom = 12, api_key = key), extent = "device")+
+  geom_point(aes(x = lon, y = lat), data = coordinates,
+             alpha = .2, color="darkred", size = 2)
+```
+## London 2
+```{r}
+ggmap(get_map("SW1W", zoom = 13, api_key = key), extent = "device")+
+  geom_point(aes(x = lon, y = lat), data = coordinates,
+             alpha = .25, color="darkred", size = 2)
+```
+## Sloane Square
+```{r}
+ggmap(get_map("Sloane Square", zoom = 14, api_key = key), extent = "device")+
+  geom_point(aes(x = lon, y = lat), data = coordinates,
+             alpha = .25, color="darkred", size = 2)
+```
+
+# Spending by Regions
+```{r}
+# $V1 takes it as a vector instead of data frame
+London_regions <- read.csv("./Data/London Town and Boroughs.csv", stringsAsFactors = FALSE, header = FALSE)$V1
+
+info_walk <- read.csv("./Data/info walk.csv", stringsAsFactors = FALSE)
+Post_code_regex <- "^([A-PR-UWYZ0-9][A-HK-Y0-9][AEHMNPRTVXY0-9]?[ABEHMNPRVWXY0-9]? {1,2}[0-9][ABD-HJLN-UW-Z]{2}|GIR 0AA)$"
+
+# Of all the data there are 300 blank postcodes/addresses of which 161 are paying customers
+# counts <- data.frame(matrix(ncol = 5, nrow = 5))
+# counts[,1] <- c("London", "UK", "UK ex. London", "Non-UK", "All")
+# colnames(counts) <- c("Region", "No. customers", "Total Spend", "% of customers", "% of spend")
+
+
+counts <- tibble(region = c("London", "UK", "UK ex. London", "Non-UK", "All"), 
+                 Num_Customers = NA,
+                 Total_Spend = NA,
+                 Percentagee_Customers = NA,
+                 Percentage_Spend = NA)
+
+Total_spend <- unlist(info_walk %>%
+  filter(Amount > 0, Post != "") %>%
+  summarise(sum(Amount)))
+
+Total_count <- unlist(info_walk %>%
+  filter(Amount > 0, Post != "") %>%
+  distinct(Name) %>%
+  summarise(number = n()))
+
+# gets London residents only
+counts[1, -1] <- unlist(info_walk %>% 
+  filter(grepl(Post_code_regex, Post), tolower(Town.x) %in% tolower(London_regions), Amount > 0) %>% 
+  group_by(Name) %>% 
+  summarise(Total.spend = sum(Amount, na.rm = TRUE)) %>% 
+  summarise(number = n(), Sum.of.spend = round(sum(Total.spend))) %>% 
+  mutate(percent.count = (number/Total_count)*100,
+         percent.spend = (Sum.of.spend/Total_spend)*100))
+
+# finds UK postcodes only
+counts[2, -1] <- unlist(info_walk %>% 
+  filter(grepl(Post_code_regex, Post) | tolower(Town.x) %in% tolower(London_regions), Amount > 0) %>%
+  group_by(Name) %>% 
+  summarise(Total.spend = sum(Amount, na.rm = TRUE)) %>% 
+  summarise(number = n(), Sum.of.spend = round(sum(Total.spend))) %>%
+  mutate(percent.count = (number/Total_count)*100,
+         percent.spend = (Sum.of.spend/Total_spend)*100))
+
+# finds UK, non-London postcodes
+counts[3, -1] <- unlist(info_walk %>% 
+  filter(grepl(Post_code_regex, Post), !(tolower(Town.x) %in% tolower(London_regions)), Amount > 0) %>%
+  group_by(Name) %>% 
+  summarise(Total.spend = sum(Amount, na.rm = TRUE)) %>% 
+  summarise(number = n(), Sum.of.spend = round(sum(Total.spend))) %>%
+  mutate(percent.count = (number/Total_count)*100,
+         percent.spend = (Sum.of.spend/Total_spend)*100))
+
+# find non UK postcodes
+counts[4, -1] <- unlist(info_walk %>% 
+  filter(!grepl(Post_code_regex, Post), Post != "", !(tolower(Town.x) %in% tolower(London_regions)), Amount > 0) %>%
+  group_by(Name) %>% 
+  summarise(Total.spend = sum(Amount, na.rm = TRUE)) %>% 
+  summarise(number = n(), Sum.of.spend = round(sum(Total.spend))) %>%
+  mutate(percent.count = (number/Total_count)*100,
+         percent.spend = (Sum.of.spend/Total_spend)*100))
+
+# The totals
+counts[5, -1] <- c(Total_count, Total_spend, 100, 100)
+
+write.csv(counts, "./Analysis/Customers by region.csv", row.names = FALSE)
+
+select(counts, -c(Total_Spend, Num_Customers))
+```
+
+# Walking Distance from Store
+```{r}
+distance <- data.frame()
+
+# $V1 takes it as a vector instead of data frame
+London_regions <- read.csv("./Data/London Town and Boroughs.csv", stringsAsFactors = FALSE, header = FALSE)$V1
+Post_code_regex <- "^([A-PR-UWYZ0-9][A-HK-Y0-9][AEHMNPRTVXY0-9]?[ABEHMNPRVWXY0-9]? {1,2}[0-9][ABD-HJLN-UW-Z]{2}|GIR 0AA)$"
+
+London_cust <- info %>% 
+  filter(grepl(Post_code_regex, Post), tolower(Town) %in% tolower(London_regions), Amount > 0) %>%
+  distinct(Post)
+```
+
+```{r}
+# getting the walking distance from Google
+distance <- unnest(
+  enframe(
+    map(London_cust$Post, mapdist, to = "SW1W 1EX", mode = "walking", output = "simple")
+    )
+  )
+info_walk <- inner_join(x = info, y = distance, by = c("Post" = "from"))
+write.csv(distance, "./data/walking distance from store.csv", row.names = FALSE)
+
+walking_dist <- read.csv("./data/walking distance from store.csv", stringsAsFactors = FALSE)
+walking_dist <- subset(walking_dist, minutes < 300)
+head(select(walking_dist, -from))
+```
+
+## Histogram of Walking Distance
+```{r}
+# ggplotly(
+ggplot(walking_dist, aes(minutes)) +
+  theme(axis.text.y=element_blank()) +
+  geom_histogram(position = 'stack', binwidth = 5, alpha = 0.9, col = "white", boundary = 0)#,
+#   width = 900
+# )
+```
+
+## Cumulative Graph of Walking Distance from Store
+Only 30% of customers live within a 30 minute walk from the store. Some may work nearby, or the store may be a destination store instead of relying on local clientel.
+```{r}
+ggplotly(
+  ggplot(walking_dist %>% arrange(minutes), aes(minutes)) + 
+    stat_ecdf(geom = "step", col = "blue", size = 0.5) +
+    scale_x_continuous(breaks = seq(0, 300, 15)) +
+    scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+    ylab("Percentage") +
+    ggtitle("Walking Distance from Store"),
+  width = 900
+)
+```
+
+# Age Demographics Comparison
+```{r}
+# Categorises customer numbers and spending into age categories and filters by proximity of 45 min walk
+age_summary <- function(lower, upper){
+  info_walk %>% 
+    group_by(Name) %>% 
+    summarise(spend = sum(Amount, na.rm = TRUE), Age = Age[1], minutes = minutes[1]) %>%  # as each name has multiple only take 1st age&min
+    filter(Age >= lower, Age <= upper, spend > 0, minutes > 30) %>% 
+    summarise(count = n_distinct(Name))
+}
+
+# Census data
+census <- read.csv("./Census data/Census area summary.csv", stringsAsFactors = FALSE)
+
+TD_count <- mapply(age_summary, lower = census$Lower, upper = census$Upper)
+TD_count <- matrix(unlist(t(TD_count)), ncol = 1)  #Transposes then converts the list to a matrix
+colnames(TD_count) <- "TD_count"
+
+census_sum <- cbind(census, TD_count)
+census_sum <- mutate(census_sum, count_percent = TD_count/sum(TD_count))
+
+age_group <- paste(census_sum[ ,1], "-", census_sum[ ,2], sep = "")
+comparison <- cbind(age_group, census_sum[,3:6])
+colnames(comparison) <- c("age_group", "Count", "Census", "TD_count", "TD customers")
+comp_long <- cbind(age_group, gather(comparison[,2:5]))
+comp_long <- subset(comp_long, key %in% c("Census", "TD customers"))
+# keep data as factors, otherwise it sorts by numerical order
+comp_long$age_group <- factor(comp_long$age_group, levels = unique(comp_long$age_group))
+comp_long$key <- factor(comp_long$key, levels = unique(comp_long$key))
+```
+For age comparison it only looks at 160 out of 940 customer, after filtering for 45min walking proximity, age data and spending.
+Overall compared to the local area the store attracts a much larger proportion of those aged between 45-59 compared to other ages groups.
+```{r}
+comp_long <- comp_long %>% mutate(percent = value*100)
+# ggplotly(
+  ggplot(comp_long, aes(x = age_group, y = percent, fill = key)) +
+    theme(axis.text.x=element_blank()) +
+    geom_bar(stat = "identity", position = position_dodge()) +
+    xlab("Age Categories") +
+    ylab("Percentage") +
+    ggtitle("Comparison of Age Groups (2011 K&C Census vs Store)") +
+    scale_y_continuous(breaks = seq(0, 100, 10))#,
+#   width = 900,
+#   height = 500
+# )
+```
+
+
